@@ -1,0 +1,274 @@
+-- ******************************************************--
+--						MOD							--
+-- ******************************************************--
+MODULE m(a,b)
+VAR
+	c : Real;
+ASSIGN
+	next(c)	:= case 
+		   	a>b : (a - b);
+		   	TRUE: (b - a);
+		   esac;
+-- ******************************************************--
+-- 		Average Calculation (for Grid size)	--
+-- ******************************************************--
+MODULE avg_grid(n1, n2, n3, n4, n5, n6, n7, n8, n9)
+DEFINE
+	n_avg	:= (n1+n2+n3+n4+n5+n6+n7+n8+n9)/9;
+--**********************************************************************--
+--	Tile Agent							--
+--**********************************************************************--
+MODULE TA(IDx, IDy, cluster_number, IDxn, IDyn, IDxe, IDye, IDxw, IDyw, IDxs, IDys, tn, te, tw, ts, migration_task_power, migration_task_time, selx, sely, KCm, KTm)
+VAR
+	Power 	: real;
+	P		: 0 .. 10;
+	Hot 	: boolean;
+	m_task	: real;
+	n_hotspot : integer;
+	n_stalls : integer;
+	n_migration : integer;
+	modxn : m(IDx, IDxn);
+	modxe : m(IDx, IDxe);
+	modxw : m(IDx, IDxw);
+	modxs : m(IDx, IDxs);
+	modyn : m(IDy, IDyn);
+	modye : m(IDy, IDye);
+	modyw : m(IDy, IDyw);
+	modys : m(IDy, IDys);
+	modbwn	: m(task_time, tn);
+	modbwe	: m(task_time, te);
+	modbww	: m(task_time, tw);
+	modbws	: m(task_time, ts);
+	
+DEFINE 
+	T_ambient := 25;
+	Pro_Tth	:= 39;
+	alpha := 0.5;
+	beta  := 0.5;
+	temp := (0.655*Power) + T_ambient;
+	task_time := Power; -- one power unit require one time cycles to complete	
+	dist_on	:= modxn.c + modyn.c;
+	dist_oe	:= modxe.c + modye.c;
+	dist_ow	:= modxw.c + modyw.c;
+	dist_os	:= modxs.c + modys.c;
+	bw_on	:= modbwn.c;
+	bw_oe	:= modbwe.c;
+	bw_ow	:= modbww.c;
+	bw_os	:= modbws.c;
+	KC 		:= (dist_on* bw_on)+ (dist_oe* bw_oe)+ (dist_ow* bw_ow)+ (dist_os* bw_os);
+	KT		:= (migration_task_power * migration_task_time)* (temp * temp);
+	KCom	:= KCm - KC;
+	cost 	:= alpha * KTm + beta * KCom;
+	total_core_Power := Power + next(Power);
+ASSIGN
+	init(Power) := P;
+	next(Power) :=  
+					case 
+						 temp > Pro_Tth : 0;
+						 (selx = IDx) & (sely = IDy) : migration_task_power; 
+						 TRUE: Power;
+					esac;
+	init(m_task) := 0;
+	next(m_task) :=  
+					case 
+						 temp > Pro_Tth : Power;
+						 (selx = IDx) & (sely = IDy) : 0; 
+						 TRUE: 0;
+					esac;
+	next(Hot) :=  
+					case 
+						 temp > Pro_Tth : TRUE;
+						 TRUE : FALSE;
+					esac;
+	init(n_hotspot):= 0;
+	next(n_hotspot):= 
+					case
+						temp > Pro_Tth : n_hotspot +1;
+						TRUE : n_hotspot;
+					esac;
+	init(n_stalls):= 0;
+	next(n_stalls):= 
+					case
+						(next(temp) > Pro_Tth) & temp > Pro_Tth : n_stalls +1;
+						TRUE : n_hotspot;
+					esac;
+	init(n_migration):= 0;
+	next(n_migration):= 
+					case
+						(selx = IDx) & (sely = IDy) &(migration_task_power != 0)	: n_migration +1;
+						TRUE : n_migration;
+					esac;
+--**********************************************************************--
+--	Cluster Agent							--
+--**********************************************************************--
+
+MODULE CA(IDx1, IDy1, IDx2, IDy2, IDx3, IDy3, KC1, KC2, KC3, KT1, KT2, KT3, req1, req2, req3, m_task1, m_task2, m_task3, cost1, cost2, cost3, temp1, temp2, temp3, ReqGA, m_task_GA)
+VAR
+	migration_task_power : array 0 .. 2 of real;
+	migration_task_time	 : array 0 .. 2 of real;
+	coolx : integer;
+	cooly : integer;
+	m_task : real;
+	ReqCA	: boolean;
+	mc_task : real;
+	KTm : real;
+	KCm : real;
+DEFINE 
+	Pro_Tth	:= 39;
+ASSIGN
+	init(mc_task) := 0;
+	next(mc_task) := 
+					case
+						((req1 = TRUE)|(req2 = TRUE)|(req3 = TRUE)|(ReqGA = TRUE))&(coolx = 0)&(cooly = 0) : m_task;
+						TRUE : 0;
+					esac;
+	init(ReqCA) := FALSE;
+	next(ReqCA) := 
+					case
+						(coolx = 0) & (cooly = 0) : TRUE;
+						TRUE : FALSE;
+					esac;
+	init(m_task):= 0;
+	next(m_task):= 
+					case
+						(req2 = TRUE)&(m_task2 >= m_task1) & (m_task2 >= m_task3) & (ReqGA = FALSE): m_task2;
+						(req3 = TRUE)&(m_task3 >= m_task1) & (m_task3 >= m_task2) & (ReqGA = FALSE) : m_task3;
+						(ReqGA = TRUE) : m_task_GA;
+						TRUE : m_task1;
+					esac;
+	init(coolx) := 0;
+	next(coolx)	:= 
+					case
+						((req1 = TRUE)|(req2 = TRUE)|(req3 = TRUE))&(cost1 < cost2) & (cost1 < cost3)&(temp1<Pro_Tth) : IDx1;
+						((req1 = TRUE)|(req2 = TRUE)|(req3 = TRUE))&(cost2 < cost1) & (cost2 < cost3)&(temp2<Pro_Tth) : IDx2;
+						((req1 = TRUE)|(req2 = TRUE)|(req3 = TRUE))&(cost3 < cost1) & (cost3 < cost2)&(temp3<Pro_Tth) : IDx3;
+						TRUE : 0;
+					esac;
+	init(cooly)	:= 0;
+	next(cooly)	:= 
+					case
+						((req1 = TRUE)|(req2 = TRUE)|(req3 = TRUE))&(cost1 < cost2) & (cost1 < cost3)&(temp1<Pro_Tth) : IDy1;
+						((req1 = TRUE)|(req2 = TRUE)|(req3 = TRUE))&(cost2 < cost1) & (cost2 < cost3)&(temp2<Pro_Tth) : IDy2;
+						((req1 = TRUE)|(req2 = TRUE)|(req3 = TRUE))&(cost3 < cost1) & (cost3 < cost2)&(temp3<Pro_Tth) : IDy3;
+						TRUE : 0;
+					esac;
+	init(migration_task_power[0]) := 0;
+	next(migration_task_power[0]) :=
+									case
+										(coolx = IDx1 & cooly = IDy1) : m_task;
+										TRUE : 0;
+									esac;
+	init(migration_task_power[1]) := 0;
+	next(migration_task_power[1]) :=
+									case
+										(coolx = IDx2 & cooly = IDy2) : m_task;
+										TRUE : 0;
+									esac;
+	init(migration_task_power[2]) := 0;
+	next(migration_task_power[2]) :=
+									case
+										(coolx = IDx3 & cooly = IDy3) : m_task;
+										TRUE : 0;
+									esac;
+	init(migration_task_time[0]) := 0;
+	next(migration_task_time[0]) :=
+									case
+										(coolx = IDx1 & cooly = IDy1) : m_task;
+										TRUE : 0;
+									esac;
+	init(migration_task_time[1]) := 0;
+	next(migration_task_time[1]) :=
+									case
+										(coolx = IDx2 & cooly = IDy2) : m_task;
+										TRUE : 0;
+									esac;
+	init(migration_task_time[2]) := 0;
+	next(migration_task_time[2]) :=
+									case
+										(coolx = IDx3 & cooly = IDy3) : m_task;
+										TRUE : 0;
+									esac;										
+	init(KTm) := 0;
+	next(KTm) := 
+				case
+					(coolx = IDx1) & (cooly = IDy1) : KT1;
+					(coolx = IDx2) & (cooly = IDy2) : KT2;
+					(coolx = IDx3) & (cooly = IDy3) : KT3;
+					TRUE : 0;
+				esac;
+	init(KCm) := 0;
+	next(KCm) := 
+				case
+					(coolx = IDx1) & (cooly = IDy1) : KC1;
+					(coolx = IDx2) & (cooly = IDy2) : KC2;
+					(coolx = IDx3) & (cooly = IDy3) : KC3;
+					TRUE : 0;
+				esac;
+--**********************************************************************--
+--	Global Agent							--
+--**********************************************************************--
+
+MODULE GA(ReqCA1, ReqCA2, ReqCA3, mc_task1, mc_task2, mc_task3)
+
+VAR 
+    ReqGA	: boolean;
+	mg_task : real;
+ASSIGN
+	init(ReqGA) := FALSE;
+	next(ReqGA) := 
+					case
+						(ReqCA1 = TRUE ) | (ReqCA2 = TRUE ) | (ReqCA3 = TRUE ) : TRUE;
+						TRUE : FALSE;
+					esac;
+	init(mg_task):= 0;
+	next(mg_task):= 
+					case
+						(ReqCA2 = TRUE)&(mc_task2 >= mc_task1) & (mc_task2 >= mc_task3) : mc_task2;
+						(ReqCA3 = TRUE)&(mc_task3 >= mc_task1) & (mc_task3 >= mc_task2) : mc_task3;
+						TRUE : mc_task1;
+					esac;
+		    
+--**********************************************************************--
+--	Main Module							--
+--**********************************************************************--
+
+MODULE main
+VAR
+-- Tile Agents
+	core1: TA(1, 1, 1, 0, 0, 1, 2, 0, 0, 2, 1, 0, core2.temp, 0, core4.temp, CA_1.migration_task_power[0], CA_1.migration_task_time[0], CA_1.coolx, CA_1.cooly, CA_1.KCm, CA_1.KTm);
+	core2: TA(1, 2, 1, 0, 0, 1, 3, 1, 1, 2, 2, 0, core3.temp, core1.temp, core5.temp, CA_1.migration_task_power[1], CA_1.migration_task_time[1], CA_1.coolx, CA_1.cooly, CA_1.KCm, CA_1.KTm);
+	core3: TA(1, 3, 2, 0, 0, 0, 0, 1, 2, 2, 3, 0, 0, core2.temp, core6.temp, CA_2.migration_task_power[0], CA_2.migration_task_time[0], CA_2.coolx, CA_2.cooly, CA_2.KCm, CA_2.KTm);
+	core4: TA(2, 1, 1, 1, 1, 2, 2, 0, 0, 3, 2, core1.temp, core5.temp, 0, core7.temp, CA_1.migration_task_power[2], CA_1.migration_task_time[2], CA_1.coolx, CA_1.cooly, CA_1.KCm, CA_1.KTm);
+	core5: TA(2, 2, 3, 1, 2, 2, 3, 3, 2, 2, 1, core2.temp, core6.temp, core8.temp, core4.temp, CA_3.migration_task_power[0], CA_3.migration_task_time[0], CA_3.coolx, CA_3.cooly, CA_3.KCm, CA_3.KTm);
+	core6: TA(2, 3, 2, 1, 3, 0, 0, 2, 2, 3, 3, core3.temp, 0, core5.temp, core9.temp, CA_2.migration_task_power[1], CA_2.migration_task_time[1], CA_2.coolx, CA_2.cooly, CA_2.KCm, CA_2.KTm);
+	core7: TA(3, 1, 3, 2, 1, 3, 2, 0, 0, 0, 0, core4.temp, core8.temp, 0, 0, CA_3.migration_task_power[1], CA_3.migration_task_time[1], CA_3.coolx, CA_3.cooly, CA_3.KCm, CA_3.KTm);
+	core8: TA(3, 2, 3, 2, 2, 3, 3, 3, 1, 0, 0, core5.temp, core9.temp, core7.temp, 0, CA_3.migration_task_power[2], CA_3.migration_task_time[2], CA_3.coolx, CA_3.cooly, CA_3.KCm, CA_3.KTm);
+	core9: TA(3, 3, 2, 2, 3, 0, 0, 3, 2, 0, 0, core6.temp, 0, core8.temp, 0, CA_2.migration_task_power[2], CA_2.migration_task_time[2], CA_2.coolx, CA_2.cooly, CA_2.KCm, CA_2.KTm);
+-- Cluster Agents
+
+	CA_1 : CA(1, 1, 1, 2, 2, 1, core1.KC, core2.KC, core4.KC, core1.KT, core2.KT, core4.KT, core1.Hot, core2.Hot, core4.Hot, core1.m_task, core2.m_task, core4.m_task, core1.cost, core2.cost, core4.cost, core1.temp, core2.temp, core4.temp, GA_1.ReqGA, GA_1.mg_task);
+	CA_2 : CA(1, 3, 2, 3, 3, 3, core3.KC, core6.KC, core9.KC, core3.KT, core6.KT, core9.KT, core3.Hot, core6.Hot, core9.Hot, core3.m_task, core6.m_task, core9.m_task, core3.cost, core6.cost, core9.cost, core3.temp, core6.temp, core9.temp, GA_1.ReqGA, GA_1.mg_task);
+	CA_3 : CA(2, 2, 3, 1, 3, 2, core5.KC, core7.KC, core8.KC, core5.KT, core7.KT, core8.KT, core5.Hot, core7.Hot, core8.Hot, core5.m_task, core7.m_task, core8.m_task, core5.cost, core7.cost, core8.cost, core5.temp, core7.temp, core8.temp, GA_1.ReqGA, GA_1.mg_task);
+-- Golbal Agent	
+	GA_1 : GA(CA_1.ReqCA, CA_2.ReqCA, CA_3.ReqCA, CA_1.mc_task, CA_2.mc_task, CA_3.mc_task);
+-- Average Temperature of Grid
+	avg  : avg_grid (core1.temp, core2.temp, core3.temp, core4.temp, core5.temp, core6.temp, core7.temp, core8.temp, core9.temp);
+DEFINE
+	total_grid_Power := core1.total_core_Power + core2.total_core_Power + core3.total_core_Power + core4.total_core_Power + core5.total_core_Power + core6.total_core_Power + core7.total_core_Power + core8.total_core_Power + core9.total_core_Power;
+	total_n_stalls := core1.n_stalls + core2.n_stalls + core3.n_stalls + core4.n_stalls + core5.n_stalls + core6.n_stalls + core7.n_stalls + core8.n_stalls + core9.n_stalls;
+	total_n_hotspot := core1.n_hotspot + core2.n_hotspot + core3.n_hotspot + core4.n_hotspot + core5.n_hotspot + core6.n_hotspot + core7.n_hotspot + core8.n_hotspot + core9.n_hotspot;
+	total_n_migration := core1.n_migration + core2.n_migration + core3.n_migration + core4.n_migration + core5.n_migration + core6.n_migration + core7.n_migration + core8.n_migration + core9.n_migration;
+
+-- ******************************************************--
+-- 		LTL Properties				--
+-- ******************************************************--	
+LTLSPEC
+ 	G(F(avg.n_avg < 41.5))
+LTLSPEC
+ 	G(F((core1.temp < 41.5)&(core2.temp < 41.5)&(core3.temp < 41.5)&(core4.temp < 41.5)&(core5.temp < 41.5)&(core6.temp < 41.5)&(core7.temp < 41.5)&(core8.temp < 41.5)&(core9.temp < 41.5)))
+LTLSPEC
+	G(F((avg.n_avg < 41.5)&(core1.temp < 41.5)&(core2.temp < 41.5)&(core3.temp < 41.5)&(core4.temp < 41.5)&(core5.temp < 41.5)&(core6.temp < 41.5)&(core7.temp < 41.5)&(core8.temp < 41.5)&(core9.temp < 41.5)))
+LTLSPEC
+	G(F((core1.temp - avg.n_avg < 5)&(core2.temp - avg.n_avg < 5)&(core3.temp - avg.n_avg < 5)&(core4.temp - avg.n_avg < 5)&(core5.temp - avg.n_avg < 5)&(core6.temp - avg.n_avg < 5)&(core7.temp - avg.n_avg < 5)&(core8.temp - avg.n_avg < 5)&(core9.temp - avg.n_avg < 5)))
+LTLSPEC
+	G(F((avg.n_avg < 41.5)&(core1.temp - avg.n_avg < 5)&(core2.temp - avg.n_avg < 5)&(core3.temp - avg.n_avg < 5)&(core4.temp - avg.n_avg < 5)&(core5.temp - avg.n_avg < 5)&(core6.temp - avg.n_avg < 5)&(core7.temp - avg.n_avg < 5)&(core8.temp - avg.n_avg < 5)&(core9.temp - avg.n_avg < 5)))
